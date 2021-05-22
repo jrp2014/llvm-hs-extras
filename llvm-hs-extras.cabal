@@ -29,8 +29,6 @@ common common-options
     , base          ^>=4.14.1.0
     , llvm-hs
     , llvm-hs-pure
-    , bytestring
-    , deepseq
 
   ghc-options:
     -Wall -Wcompat -Widentities -Wincomplete-uni-patterns
@@ -55,6 +53,9 @@ library
   import:          common-options
   hs-source-dirs:  src
   exposed-modules: LLVM.Extras
+  build-depends:
+    , bytestring
+    , deepseq
 
 executable llvm-hs-extras
   import:         common-options
