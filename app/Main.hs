@@ -1,26 +1,27 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-import LLVM.Extras ( withSimpleJIT )
-import Data.Int ( Int32 )
-import Foreign.Ptr ( FunPtr )
+import Data.Int (Int32)
+import Foreign.Ptr (FunPtr)
 import LLVM.AST
-    ( defaultModule,
-      functionDefaults,
-      Definition(GlobalDefinition),
-      Module(moduleName, moduleDefinitions),
-      BasicBlock(BasicBlock),
-      Named(Do),
-      Terminator(Ret),
-      Name(Name),
-      Operand(ConstantOperand),
-      Type(IntegerType) )
+  ( BasicBlock (BasicBlock),
+    Definition (GlobalDefinition),
+    Module (moduleDefinitions, moduleName),
+    Name (Name),
+    Named (Do),
+    Operand (ConstantOperand),
+    Terminator (Ret),
+    Type (IntegerType),
+    defaultModule,
+    functionDefaults,
+  )
 import qualified LLVM.AST as AST
-import LLVM.AST.Constant ( Constant(Int) )
+import LLVM.AST.Constant (Constant (Int))
 import LLVM.AST.Global
-    ( Global(name, parameters, returnType, basicBlocks) )
-import LLVM.Context ( withContext )
-import LLVM.PassManager ( defaultCuratedPassSetSpec )
+  ( Global (basicBlocks, name, parameters, returnType),
+  )
+import LLVM.Extras (withSimpleJIT)
+import LLVM.PassManager (defaultCuratedPassSetSpec)
 
 foreign import ccall "dynamic"
   mkMain :: FunPtr (IO Int32) -> IO Int32
@@ -53,7 +54,5 @@ module_ =
 
 main :: IO ()
 main = do
-  withContext $ \ context -> do
-    Just fn <- withSimpleJIT context module_ defaultCuratedPassSetSpec "add"
-    result <- mkMain fn
-    print result
+  result <- withSimpleJIT module_ defaultCuratedPassSetSpec "add" mkMain (* 2)
+  print result

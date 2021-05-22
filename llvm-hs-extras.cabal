@@ -30,6 +30,7 @@ common common-options
     , llvm-hs
     , llvm-hs-pure
     , bytestring
+    , deepseq
 
   ghc-options:
     -Wall -Wcompat -Widentities -Wincomplete-uni-patterns

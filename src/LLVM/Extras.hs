@@ -15,16 +15,32 @@ module LLVM.Extras
   )
 where
 
+import Control.DeepSeq
+  ( NFData,
+    force,
+  )
 import Control.Monad (unless)
+import Control.Exception ( evaluate )
 import qualified Data.ByteString.Char8 as BS
-import Foreign.Ptr (FunPtr, castPtrToFunPtr, wordPtrToPtr)
+import Foreign.Ptr
+  ( FunPtr,
+    castPtrToFunPtr,
+    wordPtrToPtr,
+  )
 import LLVM.AST
-import LLVM.AST (Module)
+  ( Module,
+    Name (..),
+  )
 import qualified LLVM.CodeGenOpt as CodeGenOpt
 import qualified LLVM.CodeModel as CodeModel
-import LLVM.Context (Context)
+import LLVM.Context
+  ( withContext,
+  )
 import LLVM.Linking (loadLibraryPermanently)
-import LLVM.Module (moduleLLVMAssembly, withModuleFromAST)
+import LLVM.Module
+  ( moduleLLVMAssembly,
+    withModuleFromAST,
+  )
 import LLVM.OrcJIT
   ( JITSymbol (JITSymbol),
     addDynamicLibrarySearchGeneratorForCurrentProcess,
@@ -50,38 +66,48 @@ import LLVM.Target (withHostTargetMachine)
 optimize3 :: PassSetSpec
 optimize3 = defaultCuratedPassSetSpec {optLevel = Just 3}
 
--- | Given a 'Context', an AST ('Module') a 'PassSetSpec'
--- (eg, 'defaultCuratedPassSetSpec) and the name of the function, return
--- a pointer to the resulting JIT-compiled function which can then be run in that 'Context'
--- (perhaps using 'Control.DeepSeq.force' and then 'Control.Exception.evaluate')
-withSimpleJIT :: Context -> Module -> PassSetSpec -> Name -> IO (Maybe (FunPtr a))
-withSimpleJIT context ast passes (Name name) = do
+-- | Given an AST ('Module') a 'PassSetSpec' (eg, 'defaultCuratedPassSetSpec)
+-- and the name of the function, compile and run it and return the result.
+withSimpleJIT ::
+  NFData a =>
+  Module ->
+  PassSetSpec ->
+  Name ->
+  -- | The signature of the function (eg, @FunPtr (IO Int32) -> IO Int322)
+  (FunPtr (IO ft) -> IO ft) ->
+  -- | what to do with the resulting function
+  (ft -> a) ->
+  IO a
+withSimpleJIT ast passes (Name name) mkFun apFun = do
   loaded <- loadLibraryPermanently Nothing -- make the symbols from the current process available.
-  unless loaded $ putStrLn "withSimpleJIT: Failed to load symbols from current process"
+  unless loaded $
+    putStrLn "withSimpleJIT: Failed to load symbols from current process"
+  withContext $ \context -> do
+    withModuleFromAST context ast $ \modul -> do
+      putStrLn "Original Module Assembly:"
+      asm <- moduleLLVMAssembly modul
+      BS.putStrLn asm
 
-  withModuleFromAST context ast $ \modul -> do
-    putStrLn "Original Module Assembly:"
-    asm <- moduleLLVMAssembly modul
-    BS.putStrLn asm
+      withPassManager passes $ \pm -> do
+        optimized <- runPassManager pm modul
+        unless optimized $ putStrLn "withSimpleJIT: Failed to optimize module"
 
-    withPassManager passes $ \pm -> do
-      optimized <- runPassManager pm modul
-      unless optimized $ putStrLn "withSimpleJIT: Failed to optimize module"
+        optasm <- moduleLLVMAssembly modul
+        BS.putStrLn optasm
 
-      optasm <- moduleLLVMAssembly modul
-      BS.putStrLn optasm
-
-      withHostTargetMachine Reloc.PIC CodeModel.Default CodeGenOpt.Default $ \tm ->
-        withExecutionSession $ \executionSession -> do
-          dylib <- createJITDylib executionSession "SimpleDylib"
-          withClonedThreadSafeModule modul $ \tsm -> do
-            linkingLayer <- createRTDyldObjectLinkingLayer executionSession
-            compileLayer <- createIRCompileLayer executionSession linkingLayer tm
-            --              addDynamicLibrarySearchGeneratorForCurrentProcess compileLayer dylib
-            addModule tsm dylib compileLayer
-            symbol <- lookupSymbol executionSession compileLayer dylib name
-            case symbol of
-              Left err -> do
-                print err
-                return Nothing
-              Right (JITSymbol mainFn _) -> return $ Just (castPtrToFunPtr (wordPtrToPtr mainFn))
+        withHostTargetMachine Reloc.PIC CodeModel.Default CodeGenOpt.Default $ \tm ->
+          withExecutionSession $ \executionSession -> do
+            dylib <- createJITDylib executionSession "SimpleDylib"
+            withClonedThreadSafeModule modul $ \tsm -> do
+              linkingLayer <- createRTDyldObjectLinkingLayer executionSession
+              compileLayer <- createIRCompileLayer executionSession linkingLayer tm
+              addDynamicLibrarySearchGeneratorForCurrentProcess compileLayer dylib
+              addModule tsm dylib compileLayer
+              symbol <- lookupSymbol executionSession compileLayer dylib name
+              case symbol of
+                Left err -> do
+                  print err
+                  error "quit"
+                Right (JITSymbol fnAddr _) -> do
+                  fn <- mkFun . castPtrToFunPtr $ wordPtrToPtr fnAddr
+                  evaluate $ force (apFun fn)
